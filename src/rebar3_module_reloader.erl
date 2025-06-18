@@ -111,6 +111,7 @@ auto(Extensions) ->
                     case IsValid of
                         false -> pass;
                         true ->
+                            io:format("~p changed, reloading...~n", [ChangedFile]),
                             % sleep here so messages can bottle up
                             % or we can flush after compile?
                             timer:sleep(200),
