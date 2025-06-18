@@ -112,6 +112,29 @@ auto(Extensions) ->
                         false -> pass;
                         true ->
                             io:format("~p changed, reloading...~n", [ChangedFile]),
+
+                            %% split the file name and extension
+                            
+                            BaseName = filename:basename(ChangedFile),
+                            Extension = filename:extension(BaseName),
+                            case Extension of
+                                ".erl" -> 
+                                    PossibleModuleName = filename:basename(BaseName, ".erl"),
+                                    PossibleModule = list_to_existing_atom(PossibleModuleName),
+                                    case code:is_loaded(PossibleModule) of
+                                        {file, _} ->
+                                            io:format("Recompiling ~p...~n", [PossibleModule]),
+                                            R = c:c(PossibleModule),
+                                            io:format("Recompilation result: ~p~n", [R]),
+                                            ok;
+                                        _ -> 
+                                            ok
+                                    end;
+                                _ ->
+                                    ok
+                            end,
+                            
+
                             % sleep here so messages can bottle up
                             % or we can flush after compile?
                             timer:sleep(200),
