@@ -25,6 +25,14 @@
 -define(PROVIDER, auto).
 -define(DEPS, [compile]).
 
+
+%%% TODO: gen_event to distribute change events
+%%% TODO: make the auto call robust for exceptions
+%%% TODO: compile "new" modules to ../ebin if it exists
+%%% TODO: detect include directories and add them to the compile options
+%%% TODO: locking mechanism to prevent multiple recompiles
+%%% TODO: when a .hrl file change, search for beam files that include it and recompile them
+
 %% ===================================================================
 %% Public API
 %% ===================================================================
@@ -74,6 +82,8 @@ do(State) ->
             Extensions = get_extensions(State, Opts),
             ?MODULE:auto(Extensions)
         end),
+    io:format("~p started, listening for changes...~n", [?MODULE]),
+    proc_lib:spawn(fun() -> list_source_files(State, "erl") end),
     State1 = remove_from_plugin_paths(State),
     rebar_prv_shell:do(State1).
 
@@ -134,7 +144,7 @@ auto(Extensions) ->
                                             io:format("Module ~s not loaded, performing full compile~n", [PossibleModuleName]),
                                             R = c:c(ChangedFile),
                                             io:format("Result ~p~n", [R]),
-                                            
+
                                             ok
                                     end;
                                 _ ->
@@ -195,3 +205,39 @@ remove_from_plugin_paths(State) ->
         PluginPaths
     ),
     rebar_state:code_paths(State, all_plugin_deps, PluginsMinusAuto).
+
+
+%% List all .erl files in the project by scanning each app's "src" directory.
+-spec list_source_files(rebar_state:t(), list()) -> [binary()].
+list_source_files(State, Extension) ->
+    %% Retrieve project applications and checked-out dependencies
+    ProjectApps = rebar_state:project_apps(State),
+    CheckoutDeps = [AppInfo || AppInfo <- rebar_state:all_deps(State),
+                              rebar_app_info:is_checkout(AppInfo) =:= true],
+    AllApps = ProjectApps ++ CheckoutDeps,
+
+    RegExp = ".*\." ++ Extension,
+    R = lists:foldl(
+      fun(AppInfo, Acc) ->
+              AppDir = rebar_app_info:dir(AppInfo),
+              SrcDir = filename:join(AppDir, <<"src">>),
+              case filelib:is_dir(SrcDir) of
+                  true ->
+                      Files = filelib:fold_files(
+                                  SrcDir,
+                                  RegExp,
+                                  true,
+                                  fun(File, L) -> [File | L] end,
+                                  []),
+                      Acc ++ Files;
+                  false ->
+                      Acc
+              end
+      end,
+      [],
+      AllApps),
+
+
+   io:format("Found ~p Erlang source files~n", [length(R)]),
+   io:format("~p\n",[R]),
+   R.
