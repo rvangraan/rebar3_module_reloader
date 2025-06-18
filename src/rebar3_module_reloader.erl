@@ -69,7 +69,7 @@ format_error(Reason) ->
 -spec do(rebar_state:t()) -> {ok, rebar_state:t()} | {error, string()}.
 do(State) ->
     Opts = rebar_state:get(State, auto, []),
-    spawn(fun() ->
+    proc_lib:spawn(fun() ->
             listen_on_project_apps(State, Opts),
             Extensions = get_extensions(State, Opts),
             ?MODULE:auto(Extensions)
@@ -111,10 +111,7 @@ auto(Extensions) ->
                     case IsValid of
                         false -> pass;
                         true ->
-                            io:format("~p changed, reloading...~n", [ChangedFile]),
-
-                            %% split the file name and extension
-                            
+                            %% split the file name and extension                           
                             BaseName = filename:basename(ChangedFile),
                             Extension = filename:extension(BaseName),
                             case Extension of
@@ -123,24 +120,27 @@ auto(Extensions) ->
                                     PossibleModule = list_to_existing_atom(PossibleModuleName),
                                     case code:is_loaded(PossibleModule) of
                                         {file, _} ->
-                                            io:format("Recompiling ~p...~n", [PossibleModule]),
                                             R = c:c(PossibleModule),
-                                            io:format("Recompilation result: ~p~n", [R]),
+                                            case R of
+                                                {ok, _} -> 
+                                                    io:format("Recompiled ~s~n", [ChangedFile]),
+                                                    ok;
+                                                {error, _} -> 
+                                                    io:format("Recompilation of ~s failed: ~p~n", [ChangedFile, R]),
+                                                    ok
+                                            end,
                                             ok;
                                         _ -> 
+                                            io:format("Module ~s not loaded, performing full compile~n", [PossibleModuleName]),
+                                            R = c:c(ChangedFile),
+                                            io:format("Result ~p~n", [R]),
+                                            
                                             ok
                                     end;
                                 _ ->
                                     ok
                             end,
-                            
-
-                            % sleep here so messages can bottle up
-                            % or we can flush after compile?
-                            timer:sleep(200),
                             ok
-%                            flush(),
-%                            r3:do(compile)
                     end;
                 _ -> pass
             end
