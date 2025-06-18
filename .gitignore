@@ -1,3 +1,6 @@
+doc
+.rebar3
+_*
 .eunit
 *.o
 *.beam
@@ -15,3 +18,15 @@ deps
 .rebar3
 _build/
 _checkouts/
+*.swp
+*.swo
+.erlang.cookie
+ebin
+log
+erl_crash.dump
+.rebar
+_rel
+_deps
+_plugins
+_tdeps
+logs
