@@ -31,7 +31,6 @@
 %%% TODO: compile "new" modules to ../ebin if it exists
 %%% TODO: detect include directories and add them to the compile options
 %%% TODO: locking mechanism to prevent multiple recompiles
-%%% TODO: when a .hrl file change, search for beam files that include it and recompile them
 
 %% ===================================================================
 %% Public API
@@ -67,6 +66,7 @@ init(State) ->
             {short_desc, "Automatically run compile task on change of source file and reload modules."},
             {desc, ""}
     ]),
+    application:ensure_all_started(rebar3_module_reloader),
     {ok, rebar_state:add_provider(State, Provider)}.
 
 -spec format_error(any()) ->  iolist().
@@ -87,8 +87,7 @@ do(State) ->
     State1 = remove_from_plugin_paths(State),
     rebar_prv_shell:do(State1).
 
--define(VALID_EXTENSIONS_DEFAULT,[<<".erl">>, <<".hrl">>, <<".src">>, <<".lfe">>, <<".config">>, <<".lock">>,
-    <<".c">>, <<".cpp">>, <<".h">>, <<".hpp">>, <<".cc">>]).
+-define(VALID_EXTENSIONS_DEFAULT,[<<".erl">>, <<".hrl">>]).
 
 get_extensions(State, Opts) ->
     ExtraExtensions1 = rebar_state:get(State, extra_extensions, []), %%left for backward compatibility
@@ -126,27 +125,16 @@ auto(Extensions) ->
                             Extension = filename:extension(BaseName),
                             case Extension of
                                 ".erl" -> 
-                                    PossibleModuleName = filename:basename(BaseName, ".erl"),
-                                    PossibleModule = list_to_existing_atom(PossibleModuleName),
-                                    case code:is_loaded(PossibleModule) of
-                                        {file, _} ->
-                                            R = c:c(PossibleModule),
-                                            case R of
-                                                {ok, _} -> 
-                                                    io:format("Recompiled ~s~n", [ChangedFile]),
-                                                    ok;
-                                                {error, _} -> 
-                                                    io:format("Recompilation of ~s failed: ~p~n", [ChangedFile, R]),
-                                                    ok
-                                            end,
-                                            ok;
-                                        _ -> 
-                                            io:format("Module ~s not loaded, performing full compile~n", [PossibleModuleName]),
-                                            R = c:c(ChangedFile),
-                                            io:format("Result ~p~n", [R]),
-
-                                            ok
-                                    end;
+                                    recompile_erl_file(ChangedFile);
+                                ".hrl" ->
+                                    io:format("Header file changed: ~s~n", [ChangedFile]),
+                                    DependentModules = rebar3_module_reloader_registry:get_source_dependencies(ChangedFile),
+                                    lists:foreach(
+                                        fun recompile_erl_file/1,
+                                        DependentModules
+                                    ),
+                                    ok;
+                                            
                                 _ ->
                                     ok
                             end,
@@ -157,6 +145,41 @@ auto(Extensions) ->
 
     end,
     ?MODULE:auto(Extensions).
+
+
+recompile_erl_file(ErlFileName) ->
+    PossibleModuleName = filename:basename(ErlFileName, ".erl"),
+    PossibleModule = case PossibleModuleName  of
+                        B when is_binary(B) -> 
+                            list_to_atom(binary_to_list(PossibleModuleName));
+                        L when is_list(L) ->
+                            list_to_atom(PossibleModuleName)
+                    end,
+    case code:is_loaded(PossibleModule) of
+        {file, _} ->
+            R = c:c(PossibleModule, [brief,report_errors]),
+            case R of
+                {ok, _} -> 
+                    ok;
+                {error, _} -> 
+                    ok;
+                error ->
+                    ok
+            end,
+            ok;
+        _ when is_binary(ErlFileName)-> 
+            io:format("Module ~s not loaded, performing full compile~n", [PossibleModuleName]),
+            R = c:c(binary_to_list(ErlFileName)),
+            io:format("Result ~p~n", [R]),
+            R;
+        _ when is_list(ErlFileName)-> 
+            io:format("Module ~s not loaded, performing full compile~n", [PossibleModuleName]),
+            R = c:c(ErlFileName),
+            io:format("Result ~p~n", [R]),
+            R
+
+    end.
+
 
 flush() ->
     receive
@@ -176,7 +199,7 @@ listen_on_project_apps(State, Opts) ->
     lists:foreach(
         fun(AppInfo) ->
             AppDir = rebar_app_info:dir(AppInfo),
-            Dirs = ExtraDirs ++ [<<"src">>, <<"c_src">>],
+            Dirs = ExtraDirs ++ [<<"src">>, <<"include">>],
             lists:foreach(
                 fun(Dir) ->
                     Path = filename:join(AppDir, Dir),
@@ -216,28 +239,32 @@ list_source_files(State, Extension) ->
                               rebar_app_info:is_checkout(AppInfo) =:= true],
     AllApps = ProjectApps ++ CheckoutDeps,
 
-    RegExp = ".*\." ++ Extension,
-    R = lists:foldl(
-      fun(AppInfo, Acc) ->
+
+    lists:foreach(
+      fun(AppInfo) ->
               AppDir = rebar_app_info:dir(AppInfo),
-              SrcDir = filename:join(AppDir, <<"src">>),
-              case filelib:is_dir(SrcDir) of
-                  true ->
-                      Files = filelib:fold_files(
-                                  SrcDir,
-                                  RegExp,
-                                  true,
-                                  fun(File, L) -> [File | L] end,
-                                  []),
-                      Acc ++ Files;
-                  false ->
-                      Acc
-              end
+              proc_lib:spawn(fun() ->
+                  process_app_source_files(AppDir, Extension)
+              end)
+              
       end,
-      [],
       AllApps),
+    ok.
 
 
-   io:format("Found ~p Erlang source files~n", [length(R)]),
-   io:format("~p\n",[R]),
-   R.
+process_app_source_files(AppDir, Extension) ->
+    SrcDir = filename:join(AppDir, <<"src">>),
+    RegExp = ".*\." ++ Extension++"$",
+    case filelib:is_dir(SrcDir) of
+        true ->
+            Files = filelib:fold_files(
+                        SrcDir,
+                        RegExp,
+                        true,
+                        fun(File, L) -> [File | L] end,
+                        []),
+            [ rebar3_module_reloader_registry:add_erlang_source_file(File) || File <- Files ],
+            normal;
+        false ->
+            normal
+    end.

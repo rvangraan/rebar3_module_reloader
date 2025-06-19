@@ -5,7 +5,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, add_erlang_source_file/1]).
+-export([start_link/0, add_erlang_source_file/1, get_source_dependencies/1]).
 
 %% gen_server callbacks
 -export([
@@ -35,6 +35,18 @@ add_erlang_source_file(ErlangSourceFile) when is_binary(ErlangSourceFile) ->
     Entries = make_entries(ErlangSourceFile, IncludeFileReferences),
     [ ets:insert(?ETS, Entry) || Entry <- Entries ],
     ok.
+
+%%--------------------------------------------------------------------
+get_source_dependencies(ErlangIncludeFileReference) ->
+    IncludeFile = normalise_include_file_reference(ErlangIncludeFileReference),
+    Entries  = ets:match_object(?ETS, #reloader_file_entry{key = '_', 
+                                                           module = '_', 
+                                                           filename = '_',
+                                                           header = IncludeFile, 
+                                                           header_reference = '_'}),
+    [ Entry#reloader_file_entry.filename || Entry <- Entries].
+
+
 %%--------------------------------------------------------------------
 init([]) ->
     Tab = ets:new(?ETS, [named_table, public, set, {keypos, #reloader_file_entry.key}]),
