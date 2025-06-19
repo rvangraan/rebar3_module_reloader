@@ -5,6 +5,7 @@
               {applications,[kernel,stdlib,fs]},
               {env,[]},
               {modules,[]},
+              {mod, {rebar3_module_reloader_app, []}},
               {maintainers,["Rudolph van Graan"]},
               {licenses,["MIT"]},
               {links,[{"Github",
